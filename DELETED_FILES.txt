@@ -1,0 +1,1 @@
+src/SmartHorse.Infrastructure/Services/EmailService.cs

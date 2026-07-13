@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>SmartHorse.Domain</RootNamespace>
+    <!-- The Domain layer has zero external dependencies by design (Clean Architecture,
+         v0.1 Section 10) — it must never reference EF Core, ASP.NET Core, or any
+         Infrastructure/Application package. -->
+  </PropertyGroup>
+
+</Project>
