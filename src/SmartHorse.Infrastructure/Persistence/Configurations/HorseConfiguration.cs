@@ -85,6 +85,23 @@ public class HorseConfiguration : IEntityTypeConfiguration<Horse>
             .HasForeignKey(h => h.CurrentOwnerId)
             .OnDelete(DeleteBehavior.Restrict);
 
+        // Self-referencing lineage FKs (Sprint 2 §3). Both Restrict — SQL Server
+        // disallows multiple cascade paths from Horses back to itself through two
+        // different FK columns, and cascading a horse's soft-deletable audit-only
+        // parent link isn't meaningful anyway (soft delete is the removal path).
+        builder.HasOne(h => h.Father)
+            .WithMany()
+            .HasForeignKey(h => h.FatherId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(h => h.Mother)
+            .WithMany()
+            .HasForeignKey(h => h.MotherId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasIndex(h => h.FatherId);
+        builder.HasIndex(h => h.MotherId);
+
         builder.HasMany(h => h.Images)
             .WithOne(i => i.Horse)
             .HasForeignKey(i => i.HorseId)
@@ -96,9 +113,9 @@ public class HorseConfiguration : IEntityTypeConfiguration<Horse>
             .OnDelete(DeleteBehavior.Cascade);
 
         builder.Metadata.FindNavigation(nameof(Horse.Images))!
-            .SetPropertyAccessMode(Microsoft.EntityFrameworkCore.ChangeTracking.PropertyAccessMode.Field);
+            .SetPropertyAccessMode(PropertyAccessMode.Field);
         builder.Metadata.FindNavigation(nameof(Horse.OwnershipHistory))!
-            .SetPropertyAccessMode(Microsoft.EntityFrameworkCore.ChangeTracking.PropertyAccessMode.Field);
+            .SetPropertyAccessMode(PropertyAccessMode.Field);
 
         builder.HasQueryFilter(h => !h.IsDeleted);
     }

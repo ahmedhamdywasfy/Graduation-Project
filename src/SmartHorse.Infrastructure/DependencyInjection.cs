@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using SmartHorse.Application.Common.Interfaces;
 using SmartHorse.Infrastructure.Email;
 using SmartHorse.Infrastructure.Identity;
+using SmartHorse.Infrastructure.Images;
 using SmartHorse.Infrastructure.Persistence;
 using SmartHorse.Infrastructure.Persistence.Interceptors;
 using SmartHorse.Infrastructure.Persistence.Repositories;
@@ -70,6 +71,12 @@ public static class DependencyInjection
         services.AddScoped<IColorRepository, ColorRepository>();
         services.AddScoped<IGenderRepository, GenderRepository>();
         services.AddScoped<IHorseStatusRepository, HorseStatusRepository>();
+        services.AddScoped<IOwnershipHistoryRepository, OwnershipHistoryRepository>();
+
+        // ---- Horse Images (Person 2 Sprint 2 §7 — Cloudinary, behind IImageStorageService) ----
+        services.Configure<CloudinarySettings>(configuration.GetSection(CloudinarySettings.SectionName));
+        services.Configure<ImageValidationSettings>(configuration.GetSection(ImageValidationSettings.SectionName));
+        services.AddScoped<IImageStorageService, CloudinaryImageStorageService>();
 
         // ---- Identity / JWT (v0.2 §8; Sprint 2 §9 — Configuration Validation) ----
         services.AddOptions<JwtSettings>()

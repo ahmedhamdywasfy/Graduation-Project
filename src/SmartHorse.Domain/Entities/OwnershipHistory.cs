@@ -1,14 +1,20 @@
 using SmartHorse.Domain.Common;
+using SmartHorse.Domain.Exceptions;
 
 namespace SmartHorse.Domain.Entities;
 
 /// <summary>
-/// Ownership transfer audit trail for a <see cref="Horse"/> — Person 2 Sprint 1
-/// Database Design §1, matching v0.1 §13's HorseOwnershipHistory. Append-only:
-/// written once per ownership change and never updated, consistent with the
-/// existing <see cref="AuditLog"/> pattern from Person 1 Sprint 2.
+/// Ownership transfer audit trail for a <see cref="Horse"/> — originally added in
+/// Person 2 Sprint 1 (matching v0.1 §13's HorseOwnershipHistory), extended in
+/// Sprint 2 with <see cref="SaleDate"/> and soft-delete support for the full
+/// Ownership Module (§1). <see cref="BaseAuditableEntity.CreatedAt"/> (inherited
+/// via <see cref="SoftDeletableAuditableEntity"/>) is the moment this record was
+/// written; <see cref="PurchaseDate"/> is the ChangedAtUtc value already used
+/// since Sprint 1 — kept under its original name/column to avoid an unnecessary
+/// rename of completed Sprint 1 work, but is exactly what Sprint 2 §1 calls
+/// "Purchase Date" and is exposed under that name in <c>OwnershipHistoryDto</c>.
 /// </summary>
-public class OwnershipHistory : BaseEntity
+public class OwnershipHistory : SoftDeletableAuditableEntity
 {
     private OwnershipHistory()
     {
@@ -35,5 +41,43 @@ public class OwnershipHistory : BaseEntity
     public User NewOwner { get; private set; } = null!;
 
     public string? Notes { get; private set; }
+
+    /// <summary>The moment this ownership stint began — Sprint 2 §1 "Purchase Date".</summary>
     public DateTime ChangedAtUtc { get; private set; }
+
+    /// <summary>
+    /// The moment this ownership stint ended (set on the previously-current
+    /// record when a new transfer happens). Null while this is still the
+    /// active/current ownership record — Sprint 2 §1 "Sale Date".
+    /// </summary>
+    public DateTime? SaleDate { get; private set; }
+
+    public bool IsActive => SaleDate is null && !IsDeleted;
+
+    /// <summary>Called on the previously-current record when a new owner takes over.</summary>
+    public void CloseOut(DateTime saleDateUtc)
+    {
+        SaleDate = saleDateUtc;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>Administrator correction of a historical record's notes/dates — Sprint 2 §2 "Update Ownership".</summary>
+    public void UpdateRecord(string? notes, DateTime purchaseDateUtc, DateTime? saleDateUtc, Guid updatedBy)
+    {
+        Notes = notes?.Trim();
+        ChangedAtUtc = purchaseDateUtc;
+        SaleDate = saleDateUtc;
+        UpdatedBy = updatedBy;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    public void Delete(Guid? deletedBy)
+    {
+        if (IsDeleted)
+        {
+            throw new OwnershipRecordAlreadyDeletedException(Id);
+        }
+
+        MarkDeleted(deletedBy);
+    }
 }

@@ -1,88 +1,93 @@
-# Person 2 — Sprint 1: Build Report
+# Person 2 — Sprint 2: Build Report
 
-## ⚠️ Environment Limitation (read first)
+## ⚠️ Environment Limitation (read first, same as every prior sprint)
 
-This package was authored in a sandboxed environment **without the .NET SDK or
-NuGet registry access**. I could not run `dotnet build`, `dotnet test`,
-`dotnet ef migrations add`, or launch the API myself. Everything below reflects
-a careful manual/static review, not an executed build. **Please run the
-commands in the "Required Verification" section below and report back any
-errors** — I will fix them immediately.
-
-This is the same limitation disclosed for Person 1 Sprint 1 and Sprint 2 in
-this same repository; nothing has changed about the sandbox between then and
-now.
+This package was authored without .NET SDK or NuGet registry access. I could
+not run `dotnet build`, `dotnet test`, `dotnet ef migrations add`, or launch
+the API. Everything below is a careful manual/static review, not an executed
+build. **Please run the commands in "Required Verification" and report back
+any errors** — I will fix them immediately, the same loop that resolved the
+AutoMapper/EF Core reference issue in Sprint 1 and the `PropertyAccessMode`
+namespace issue afterward.
 
 ## What Was Actually Verified
 
-- **Namespace/reference consistency**: grepped the entire new Horse module and
-  every modified file for the exact class of bug that broke the Sprint 2
-  package on first real build attempt (bare `Domain.X` references missing
-  their `SmartHorse.` prefix, which only fails at actual compile time). None found.
-- **Signature consistency**: cross-checked every `Horse`/`OwnershipHistory`
-  constructor and method call site against its declaration (constructor
-  parameter order, `UpdateDetails`, `RecordOwnership`), and every
-  `IHorseRepository`/`IBreedRepository`/etc. interface method against its
-  implementation. All match.
-- **DI registration completeness**: confirmed every new interface
-  (`IHorseRepository`, `IBreedRepository`, `IColorRepository`,
-  `IGenderRepository`, `IHorseStatusRepository`) has a corresponding
-  `services.AddScoped<TInterface, TImplementation>()` registration in
-  `SmartHorse.Infrastructure/DependencyInjection.cs`.
-- **MediatR/FluentValidation/AutoMapper auto-discovery**: confirmed
-  `SmartHorse.Application/DependencyInjection.cs` scans the whole assembly
-  (`Assembly.GetExecutingAssembly()`), so no manual registration was needed for
-  any new command/query handler, validator, or the new `HorseMappingProfile`.
-- **EF Core relationship design**: specifically checked for the SQL Server
-  "multiple cascade paths" error class (both `OwnershipHistory` FKs to `Users`
-  are `Restrict`, not `Cascade`, for exactly this reason).
-- **Test correctness**: identified and fixed the `UserRole.Role` navigation
-  issue described in IMPLEMENTATION_REPORT.md before writing tests that depend
-  on it, rather than shipping tests I could not personally confirm would pass.
+- **The exact bug class that broke this repo's build twice before** (a bare
+  `Domain.X`/`Namespace.X` reference missing its full path, which only fails
+  at actual compile time) — grepped the entire new/modified surface area for
+  this sprint specifically. None found. Where I had genuine doubt about
+  nested-namespace resolution rules (`Images.CloudinarySettings` referenced
+  from within `SmartHorse.Infrastructure`), I didn't rely on reasoning about
+  it — I added an explicit `using` directive and switched to unqualified
+  names, removing the ambiguity entirely rather than trusting my own analysis
+  a third time.
+- **Signature consistency**: cross-checked `IHorseRepository`'s 12 methods
+  against `HorseRepository`'s implementation one-by-one (all present, matching
+  signatures); checked every `Horse`/`OwnershipHistory`/`HorseImage`
+  constructor and mutator call site against its declaration.
+- **Brace balance** on the four most heavily-edited files (`Horse.cs`,
+  `DependencyInjection.cs`, `HorseImagesController.cs`,
+  `ExceptionHandlingMiddleware.cs`) — all balanced.
+- **Backward compatibility with Sprint 1**: grepped for every call site of
+  `Horse.AddImage` (signature changed from 2 args to 9) and confirmed no
+  Sprint 1 file — including Sprint 1's own unit tests — calls the old
+  signature. `Horse.RecordOwnership`'s new "close out the previous stint"
+  logic is skipped entirely when `previousOwnerId` is null, so Sprint 1's
+  `CreateHorseCommandHandlerTests` (which calls it with `previousOwnerId: null`)
+  is unaffected.
+- **Cascade-path safety**: both new self-referencing Horse FKs (Father,
+  Mother) are `Restrict`, avoiding the same "multiple cascade paths" class of
+  SQL Server migration error already avoided for `OwnershipHistory`'s two
+  User FKs in Sprint 1.
+- **Exception correctness**: caught and fixed my own mistake before finishing
+  — `InvalidImageDimensionsException` originally had one constructor reused
+  for both "too small" and "too large" cases, which would have produced a
+  wrong error message on the too-large path. Replaced with
+  `TooSmall(...)`/`TooLarge(...)` factory methods.
 
 ## Build Status
 
-**NOT BUILT.** Cannot claim compilation success without having run the
-compiler.
+**NOT BUILT.**
 
 ## Warnings / Errors
 
-None known — but this is a review-based assessment, not an executed one.
-
-## Unit Test Results
-
-**NOT RUN.** 15 new unit test cases written across 5 test classes (see
-IMPLEMENTATION_REPORT.md's Testing Summary). Not executed.
-
-## Integration Test Results
-
-**NOT RUN.** 7 new integration test cases written in `HorsesControllerTests.cs`.
-Not executed.
-
-## Swagger Verification
-
-**NOT VERIFIED live.** `HorsesController` follows the exact `[ApiController]` /
-XML-doc-comment / `[ProducesResponseType]` pattern already used by
-`AuthController`/`UsersController`, which Swagger already picks up correctly in
-this project (confirmed by the earlier successful Sprint 1/2 build). No new
-Swagger configuration was needed or added.
+None known — review-based assessment only.
 
 ## Migration Verification
 
-**NOT GENERATED.** See IMPLEMENTATION_REPORT.md's "Migration Details" —
-generate and review it as the first step after applying this package.
+**NOT GENERATED.** See IMPLEMENTATION_REPORT.md's "Migration Details" — note
+that this will be the *first* migration for Horse Core + Ownership + Lineage +
+Images combined, since Sprint 1's migration was never generated either.
+
+## Swagger Verification
+
+**NOT VERIFIED live.** All three new controllers follow the exact
+`[ApiController]`/XML-doc/`[ProducesResponseType]` pattern already confirmed
+working for `HorsesController`.
+
+## Unit Test Results
+
+**NOT RUN.** 12 new test cases across `Ownership/`, `Lineage/`, `HorseImages/`
+in `SmartHorse.Application.Tests`.
+
+## Integration Test Results
+
+**NOT RUN.** 13 new test cases across `OwnershipControllerTests.cs`,
+`LineageControllerTests.cs`, `HorseImagesControllerTests.cs`. These rely on a
+new `FakeImageStorageService` registered in `CustomWebApplicationFactory` in
+place of the real Cloudinary implementation — no test hits the real Cloudinary
+API, so no real credentials are needed to run them.
 
 ## Required Verification (please run and report results)
 
 ```bash
 # 1. Apply this package
-tar -xzf Person2_Sprint1.tar.gz
-chmod +x apply_person2_sprint1.sh
-./apply_person2_sprint1.sh
+tar -xzf Person2_Sprint2.tar.gz
+chmod +x apply_person2_sprint2.sh
+./apply_person2_sprint2.sh
 
-# 2. Generate and review the migration BEFORE running dotnet ef database update —
-#    check the generated .cs file for anything unexpected.
-dotnet ef migrations add Person2Sprint1_HorseCore \
+# 2. Generate and review the migration
+dotnet ef migrations add Person2_HorseCoreAndOwnershipLineageImages \
   --project src/SmartHorse.Infrastructure --startup-project src/SmartHorse.API
 
 # 3. Build
@@ -99,6 +104,11 @@ dotnet test
 dotnet run --project src/SmartHorse.API
 ```
 
+If you don't have real Cloudinary credentials yet, leave `Cloudinary:*` empty
+in configuration for now — every endpoint except actual image upload will work
+fine, and the integration tests don't need real credentials at all (they use
+the fake). Only a live `POST /api/v1/horses/{id}/images` call against the
+running API (not the test suite) needs real Cloudinary credentials configured.
+
 If step 3 or step 5 fails, paste the exact output back to me and I will fix it
-in the next iteration — the same loop that worked for Person 1 Sprint 1's
-AutoMapper/EF Core reference issues.
+in the next iteration.
