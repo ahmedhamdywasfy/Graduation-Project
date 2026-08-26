@@ -22,6 +22,12 @@ public class Horse : SoftDeletableAuditableEntity
     public const decimal MinHeightCm = 30m;
     public const decimal MaxHeightCm = 250m;
 
+    /// <summary>Sprint 2 §10 — "Maximum Images" validation.</summary>
+    public const int MaxImageCount = 10;
+
+    /// <summary>Sprint 2 §3 — guards against pathological/accidental ancestor-chain depth, not a real biological limit.</summary>
+    public const int MaxLineageDepth = 20;
+
     private readonly List<HorseImage> _images = new();
     private readonly List<OwnershipHistory> _ownershipHistory = new();
 
@@ -104,6 +110,13 @@ public class Horse : SoftDeletableAuditableEntity
     public Guid CurrentOwnerId { get; private set; }
     public User CurrentOwner { get; private set; } = null!;
 
+    /// <summary>Sprint 2 §3 — Horse Lineage. Self-referencing FKs, both nullable (unknown/unset parentage is the common case).</summary>
+    public Guid? FatherId { get; private set; }
+    public Horse? Father { get; private set; }
+
+    public Guid? MotherId { get; private set; }
+    public Horse? Mother { get; private set; }
+
     public IReadOnlyCollection<HorseImage> Images => _images.AsReadOnly();
     public IReadOnlyCollection<OwnershipHistory> OwnershipHistory => _ownershipHistory.AsReadOnly();
 
@@ -180,25 +193,136 @@ public class Horse : SoftDeletableAuditableEntity
 
     /// <summary>
     /// Records an ownership change and appends the corresponding
-    /// <see cref="OwnershipHistory"/> row. Called once at creation (PreviousOwnerId
-    /// null) by <c>CreateHorseCommandHandler</c>. A dedicated transfer-ownership
-    /// use case (buyer/seller flow) is out of scope for this sprint — see the
-    /// Implementation Report's "Future Recommendations".
+    /// <see cref="OwnershipHistory"/> row, closing out the previous active
+    /// record's <see cref="OwnershipHistory.SaleDate"/> in the same operation
+    /// (Sprint 2 §1 — "Sale Date"). Called once at creation (previousOwnerId
+    /// null, nothing to close) by <c>CreateHorseCommandHandler</c>, and again by
+    /// <c>TransferOwnershipCommandHandler</c> for every subsequent transfer.
     /// </summary>
     public void RecordOwnership(Guid? previousOwnerId, Guid newOwnerId, string? notes)
     {
+        var transferDate = DateTime.UtcNow;
+
+        if (previousOwnerId.HasValue)
+        {
+            var activeRecord = _ownershipHistory.FirstOrDefault(o => o.IsActive)
+                ?? throw new NoActiveOwnershipRecordException(Id);
+            activeRecord.CloseOut(transferDate);
+        }
+
         CurrentOwnerId = newOwnerId;
         _ownershipHistory.Add(new OwnershipHistory(Id, previousOwnerId, newOwnerId, notes));
     }
 
-    public void AddImage(string imageUrl, bool isPrimary)
+    /// <summary>Sprint 2 §3 — assigns this horse's father. Caller (Application layer) has already validated gender and circularity via IHorseRepository, since that needs a DB round trip this entity can't perform itself.</summary>
+    public void SetFather(Guid fatherId)
+    {
+        if (fatherId == Id)
+        {
+            throw new SelfParentException();
+        }
+
+        FatherId = fatherId;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    public void SetMother(Guid motherId)
+    {
+        if (motherId == Id)
+        {
+            throw new SelfParentException();
+        }
+
+        MotherId = motherId;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    public void ClearLineage()
+    {
+        FatherId = null;
+        MotherId = null;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    public HorseImage AddImage(
+        string imageUrl,
+        string storageId,
+        string contentType,
+        long fileSizeBytes,
+        int width,
+        int height,
+        string contentHash,
+        bool isPrimary)
     {
         if (string.IsNullOrWhiteSpace(imageUrl))
         {
             throw new ArgumentException("Image URL cannot be empty.", nameof(imageUrl));
         }
 
-        _images.Add(new HorseImage(Id, imageUrl, isPrimary));
+        if (_images.Count >= MaxImageCount)
+        {
+            throw new MaxImagesExceededException(MaxImageCount);
+        }
+
+        if (_images.Any(i => i.ContentHash == contentHash))
+        {
+            throw new DuplicateHorseImageException();
+        }
+
+        // The very first image for a horse is automatically the main image.
+        var shouldBePrimary = isPrimary || _images.Count == 0;
+
+        if (shouldBePrimary)
+        {
+            foreach (var existing in _images)
+            {
+                existing.UnsetMain();
+            }
+        }
+
+        var nextDisplayOrder = _images.Count == 0 ? 0 : _images.Max(i => i.DisplayOrder) + 1;
+        var image = new HorseImage(Id, imageUrl, storageId, contentType, fileSizeBytes, width, height, contentHash, nextDisplayOrder, shouldBePrimary);
+        _images.Add(image);
+        return image;
+    }
+
+    public void RemoveImage(Guid imageId)
+    {
+        var image = _images.FirstOrDefault(i => i.Id == imageId)
+            ?? throw new NotFoundException(nameof(HorseImage), imageId);
+
+        var wasPrimary = image.IsPrimary;
+        _images.Remove(image);
+
+        // Promote the next image (by display order) to main if the deleted one was it.
+        if (wasPrimary)
+        {
+            var next = _images.OrderBy(i => i.DisplayOrder).FirstOrDefault();
+            next?.SetAsMain();
+        }
+    }
+
+    public void SetMainImage(Guid imageId)
+    {
+        var image = _images.FirstOrDefault(i => i.Id == imageId)
+            ?? throw new NotFoundException(nameof(HorseImage), imageId);
+
+        foreach (var existing in _images)
+        {
+            existing.UnsetMain();
+        }
+
+        image.SetAsMain();
+    }
+
+    public void ReorderImages(IReadOnlyList<Guid> orderedImageIds)
+    {
+        for (var i = 0; i < orderedImageIds.Count; i++)
+        {
+            var image = _images.FirstOrDefault(img => img.Id == orderedImageIds[i])
+                ?? throw new NotFoundException(nameof(HorseImage), orderedImageIds[i]);
+            image.UpdateDisplayOrder(i);
+        }
     }
 
     /// <summary>

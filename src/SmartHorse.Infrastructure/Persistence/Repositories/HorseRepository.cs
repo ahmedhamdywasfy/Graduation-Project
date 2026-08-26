@@ -40,6 +40,63 @@ public class HorseRepository : IHorseRepository
             .IgnoreQueryFilters()
             .FirstOrDefaultAsync(h => h.Id == id && h.IsDeleted, cancellationToken);
 
+    public Task<Horse?> GetByIdWithImagesAsync(Guid id, CancellationToken cancellationToken = default) =>
+        _context.Horses
+            .Include(h => h.Images)
+            .FirstOrDefaultAsync(h => h.Id == id, cancellationToken);
+
+    public Task<Horse?> GetByIdWithParentsAsync(Guid id, CancellationToken cancellationToken = default) =>
+        _context.Horses
+            .Include(h => h.Breed)
+            .Include(h => h.Gender)
+            .Include(h => h.Father).ThenInclude(f => f!.Breed)
+            .Include(h => h.Father).ThenInclude(f => f!.Gender)
+            .Include(h => h.Mother).ThenInclude(m => m!.Breed)
+            .Include(h => h.Mother).ThenInclude(m => m!.Gender)
+            .FirstOrDefaultAsync(h => h.Id == id, cancellationToken);
+
+    public async Task<IReadOnlyList<Horse>> GetChildrenAsync(Guid horseId, CancellationToken cancellationToken = default) =>
+        await _context.Horses
+            .Include(h => h.Breed)
+            .Include(h => h.Gender)
+            .Where(h => h.FatherId == horseId || h.MotherId == horseId)
+            .OrderBy(h => h.BirthDate)
+            .ToListAsync(cancellationToken);
+
+    public async Task<HashSet<Guid>> GetAncestorIdsAsync(Guid horseId, int maxDepth, CancellationToken cancellationToken = default)
+    {
+        var ancestorIds = new HashSet<Guid>();
+        var frontier = new List<Guid> { horseId };
+        var depth = 0;
+
+        while (frontier.Count > 0 && depth < maxDepth)
+        {
+            var parents = await _context.Horses
+                .Where(h => frontier.Contains(h.Id))
+                .Select(h => new { h.FatherId, h.MotherId })
+                .ToListAsync(cancellationToken);
+
+            var nextFrontier = new List<Guid>();
+            foreach (var pair in parents)
+            {
+                if (pair.FatherId.HasValue && ancestorIds.Add(pair.FatherId.Value))
+                {
+                    nextFrontier.Add(pair.FatherId.Value);
+                }
+
+                if (pair.MotherId.HasValue && ancestorIds.Add(pair.MotherId.Value))
+                {
+                    nextFrontier.Add(pair.MotherId.Value);
+                }
+            }
+
+            frontier = nextFrontier;
+            depth++;
+        }
+
+        return ancestorIds;
+    }
+
     public Task<bool> MicrochipNumberExistsAsync(string microchipNumber, Guid? excludeHorseId = null, CancellationToken cancellationToken = default)
     {
         var query = _context.Horses.IgnoreQueryFilters().Where(h => h.MicrochipNumber == microchipNumber);

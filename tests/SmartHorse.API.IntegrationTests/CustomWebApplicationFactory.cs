@@ -52,6 +52,18 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
 
             services.AddDbContext<ApplicationDbContext>(options =>
                 options.UseInMemoryDatabase(_databaseName));
+
+            // Sprint 2 §16 — swap the real Cloudinary-backed IImageStorageService
+            // for an in-memory fake, the same way the DbContext above is swapped
+            // to InMemory. No test hits real Cloudinary.
+            var imageStorageDescriptor = services.SingleOrDefault(
+                d => d.ServiceType == typeof(SmartHorse.Application.Common.Interfaces.IImageStorageService));
+            if (imageStorageDescriptor is not null)
+            {
+                services.Remove(imageStorageDescriptor);
+            }
+
+            services.AddScoped<SmartHorse.Application.Common.Interfaces.IImageStorageService, FakeImageStorageService>();
         });
     }
 

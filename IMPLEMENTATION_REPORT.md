@@ -1,176 +1,186 @@
-# Person 2 — Sprint 1: Database Foundation & Horse Core
+# Person 2 — Sprint 2: Ownership, Lineage & Image Management
 ## Implementation Report
 
-## Architecture Summary
+## Summary
 
-This sprint adds the "Horse Core" slice on top of Person 1's existing Clean
-Architecture (Domain → Application → Infrastructure → API), reusing every
-cross-cutting concern already in place: Repository Pattern, CQRS/MediatR,
-FluentValidation, AutoMapper, the `ApiResponse<T>` wrapper, the global exception
-handling middleware, Serilog, and the existing JWT/role-based authorization.
-No existing module was rewritten; every new file is additive, and the eight
-modified files each received the smallest possible change to wire the new
-module in (new DbSets, new DI registrations, a new authorization policy, new
-exception-to-status-code mappings, one new seeding call).
+This sprint adds three modules on top of the existing Horse Core (Person 2
+Sprint 1): **Ownership** (transfer, timeline, corrections), **Lineage**
+(father/mother, family tree, circular-relationship prevention), and **Horse
+Images** (upload/replace/delete/reorder/main-image via Cloudinary, behind a
+storage-agnostic abstraction). Every new piece follows the exact patterns
+already established in this repository — CQRS/MediatR, Repository Pattern,
+FluentValidation for format rules with handler-level checks for anything
+needing a DB round trip, the `ApiResponse<T>` wrapper, and the existing
+`CanManageHorses` policy (Administrator/Owner/Veterinarian) reused as-is for
+every write endpoint in all three new modules, since Sprint 2's access rule is
+identical to Sprint 1's.
 
-New Horse Core follows the exact same layering Person 1 established:
-- **Domain**: `Horse` (aggregate root), `Breed`/`Color`/`Gender`/`HorseStatus`
-  (lookup entities, mirroring `Role`), `OwnershipHistory`, `HorseImage`, plus a
-  new `SoftDeletableAuditableEntity` base class (Horse-specific audit/soft-delete
-  fields — Person 1's identity entities don't need these, so nothing about
-  `User`/`RefreshToken`/etc. changed).
-- **Application**: Commands (Create/Update/Delete/Restore) and Queries
-  (GetById/GetAll/Search) under `Horses/`, each with a MediatR handler and a
-  FluentValidation validator for format/range rules. Duplicate Microchip/
-  Registration Number checks and FK-existence checks are done in the handlers
-  via repository calls and thrown as specific domain exceptions — matching the
-  exact pattern Person 1 used for `EmailAlreadyRegisteredException`, not
-  FluentValidation `MustAsync`.
-- **Infrastructure**: EF Core configurations (including a global soft-delete
-  query filter on `Horse` and two filtered unique indexes), repositories, and
-  additions to `DbSeeder` for the four lookup tables plus new
-  `horses.view`/`horses.manage` permission rows.
-- **API**: `HorsesController`, and a new `CanManageHorses` authorization policy
-  added alongside the existing `RequireAdministrator` policy.
+## Architecture Decisions
+
+- **Ownership** extends the existing `OwnershipHistory` entity (added Sprint 1)
+  rather than introducing a parallel table — it already modeled almost
+  everything Sprint 2 needs (previous/new owner, notes, a timestamp). Two
+  additions: `SaleDate` (closes out a stint) and soft-delete support (the
+  entity now derives from `SoftDeletableAuditableEntity` instead of
+  `BaseEntity`). `Horse.RecordOwnership` — already the single place that
+  writes ownership records since Sprint 1 — now also closes out the
+  previously-active record's `SaleDate` in the same call, so both the very
+  first registration and every later transfer go through one domain method.
+- **Lineage** uses two nullable self-referencing FKs (`FatherId`/`MotherId`)
+  on `Horse` rather than a separate join table, since a horse has at most one
+  father and one mother. Circular-relationship prevention is a breadth-first
+  ancestor walk (`IHorseRepository.GetAncestorIdsAsync`), batched per
+  generation rather than one query per node, bounded by
+  `Horse.MaxLineageDepth` (20) as a hard safety cap. The family tree endpoint
+  builds its recursive response in the Application layer (repeated
+  single-level queries) rather than one deep EF Core Include chain, since a
+  full ancestor tree needs an exponential number of Include paths that a
+  fixed LINQ chain can't express for arbitrary depth.
+- **Horse Images**: `IImageStorageService` is a new, separate abstraction from
+  Person 1 Sprint 2's `IFileStorageService` (local-disk, avatar-specific) —
+  horse gallery images are a distinct concern (remote storage, dimensions,
+  content hashing, a deletable remote asset id). `CloudinaryImageStorageService`
+  is the only class that references `CloudinaryDotNet`; validation (content
+  type, file size, pixel dimensions via SixLabors.ImageSharp's header-only
+  `Image.Identify`) happens before any Cloudinary API call, so invalid uploads
+  never cost quota. Swapping to Azure Blob Storage later means one new class
+  and one DI registration change — no caller changes anywhere in the
+  Application or API layers.
+- **Duplicate image detection** uses a SHA-256 content hash, checked both in
+  the domain (`Horse.AddImage`) and via a unique DB index on
+  `(HorseId, ContentHash)` — defense in depth, not redundant logic duplicated
+  by hand.
 
 ## Modified Components
 
 | File | Change |
 |---|---|
-| `IApplicationDbContext.cs` | Added 7 new `DbSet<T>` properties for the Horse Core tables |
-| `ApplicationDbContext.cs` | Implemented the same 7 `DbSet<T>` properties; updated class doc comment |
-| `DependencyInjection.cs` (Infrastructure) | Registered 5 new repository interfaces/implementations |
-| `DbSeeder.cs` | Added `SeedHorseLookupDataAsync()` call + method; extended the permission seed list and grant logic |
-| `AuthenticationExtensions.cs` | Added the `CanManageHorses` policy (Administrator, Owner, Veterinarian) |
-| `ExceptionHandlingMiddleware.cs` | Added 2 new exception → HTTP 400 mappings for Horse validation exceptions |
-| `User.cs`, `UserRole.cs` | See "Notable Fix" below — unrelated to Horse Core, but touches Person 1 code |
+| `Horse.cs` | Added FatherId/MotherId + Father/Mother nav; MaxImageCount/MaxLineageDepth constants; rewrote RecordOwnership to close out the prior stint; replaced the old 2-arg AddImage with a full-metadata version; added SetFather/SetMother/ClearLineage/RemoveImage/SetMainImage/ReorderImages |
+| `OwnershipHistory.cs` | Now derives from SoftDeletableAuditableEntity; added SaleDate, IsActive, CloseOut, UpdateRecord, Delete |
+| `HorseImage.cs` | Added StorageId/ContentType/FileSizeBytes/Width/Height/ContentHash/DisplayOrder; added SetAsMain/UnsetMain/UpdateDisplayOrder |
+| `HorseConfiguration.cs` | Added Father/Mother FK config (both Restrict) |
+| `OwnershipHistoryConfiguration.cs` | Added SaleDate/CreatedAt mapping, soft-delete query filter |
+| `HorseImageConfiguration.cs` | Added new metadata columns; unique index on (HorseId, ContentHash) |
+| `IHorseRepository.cs` / `HorseRepository.cs` | Added GetByIdWithImagesAsync, GetByIdWithParentsAsync, GetChildrenAsync, GetAncestorIdsAsync |
+| `DependencyInjection.cs` (Infrastructure) | Registered IOwnershipHistoryRepository and IImageStorageService (Cloudinary); bound CloudinarySettings/ImageValidationSettings |
+| `ExceptionHandlingMiddleware.cs` | Added 10 new exception → HTTP status mappings; fixed FileTooLargeException misuse on the min-size path (added FileTooSmallException) |
+| `SmartHorse.Infrastructure.csproj` | Added CloudinaryDotNet, SixLabors.ImageSharp |
+| `appsettings.json` | Added Cloudinary and ImageValidation sections |
 
-### Notable fix (not Horse-specific)
-
-While writing unit tests for the new module, I found that `UserRole.Role` is
-only ever populated by EF Core's own query materialization — any entity graph
-built purely in memory (e.g., in a unit test that never touches a real
-`DbContext`) leaves it `null`, meaning code paths like
-`user.UserRoles.Select(ur => ur.Role.Name)` (used in `LoginCommandHandler`,
-`RefreshTokenCommandHandler`) would NullReferenceException if exercised outside
-a real database. **This is not a production bug** — EF Core's own query engine
-sets private-setter navigation properties directly during materialization,
-bypassing constructors entirely — but it meant Sprint 2's own delivered unit
-tests (`LoginCommandHandlerTests`, etc.) were never actually runnable, since
-they were never verified against a real SDK. Fixed with a small, backward-
-compatible addition: a `UserRole(Guid userId, Role role)` constructor overload
-that also wires the navigation property, used by `User.AssignRole`/
-`ReplaceRoles`. No existing method signature changed.
+No file belonging to Person 1's Authentication/User Management modules was
+touched.
 
 ## Database Changes
 
-New tables: `Breeds`, `Colors`, `Genders`, `HorseStatuses`, `Horses`,
-`HorseImages`, `OwnershipHistories`. No existing table was altered or renamed.
-
-- `Horses.MicrochipNumber` / `Horses.RegistrationNumber`: nullable, with a
-  **filtered unique index** (`WHERE ... IS NOT NULL`) so multiple horses can
-  each have no microchip/registration without a uniqueness violation.
-- `Horses` has a **global EF Core query filter** (`WHERE IsDeleted = 0`) —
-  every normal query automatically excludes soft-deleted rows; Restore bypasses
-  it explicitly via `IgnoreQueryFilters()`.
-- FK delete behavior: `Restrict` for Breed/Color/Gender/Status/CurrentOwner
-  (protects reference data and user rows); `Cascade` for HorseImages and
-  OwnershipHistories (dependent children of Horse) — matching the pattern
-  already documented in the approved v0.1 §13 schema notes.
-- `OwnershipHistories` has two FKs to `Users` (PreviousOwner, NewOwner), both
-  set to `Restrict` — SQL Server disallows multiple cascade paths to the same
-  table, so this avoids a migration-time error.
+- `Horses`: added `FatherId`, `MotherId` (both nullable Guid, self-referencing
+  FK, `Restrict` delete, indexed).
+- `OwnershipHistories`: added `SaleDate` (nullable), `CreatedAt`, `UpdatedAt`,
+  `CreatedBy`, `UpdatedBy`, `IsDeleted`, `DeletedAt`, `DeletedBy` (from the new
+  `SoftDeletableAuditableEntity` base); added a soft-delete query filter and an
+  index on `(HorseId, SaleDate)`.
+- `HorseImages`: added `StorageId`, `ContentType`, `FileSizeBytes`, `Width`,
+  `Height`, `ContentHash`, `DisplayOrder`; added a unique index on
+  `(HorseId, ContentHash)`.
+- No table was renamed; no Sprint 1 column was removed.
 
 ## Migration Details
 
-**No migration file is included in this package.** This sandbox has no .NET SDK
-or NuGet access, so I could not run `dotnet ef migrations add` myself — the
-same limitation flagged in Sprint 1/2. Generate it as the first step after
-applying this patch:
+**No migration file is included.** Same environment limitation as prior
+sprints (no .NET SDK here). Additionally: **the Person 2 Sprint 1 migration
+was never generated either** (only Sprint 1 Person 1's `InitialCreate` exists
+in the repo) — so the first migration you generate after applying this
+package will capture the Horse Core schema (Sprint 1) *and* this sprint's
+Ownership/Lineage/Image changes together, in one migration. That's expected
+and fine; there's nothing to reconcile.
 
 ```bash
-dotnet ef migrations add Person2Sprint1_HorseCore \
+dotnet ef migrations add Person2_HorseCoreAndOwnershipLineageImages \
   --project src/SmartHorse.Infrastructure --startup-project src/SmartHorse.API
 dotnet ef database update \
   --project src/SmartHorse.Infrastructure --startup-project src/SmartHorse.API
 ```
 
+## Ownership Module
+
+Endpoints under `/api/v1/horses/{horseId}/ownership` (current owner, history,
+transfer) and `/api/v1/ownership-records/{recordId}` (update/delete a specific
+historical record — not horse-scoped, since a record Id is already globally
+unique). "Create Ownership" from the spec is covered by horse creation
+(Sprint 1) and Transfer (this sprint) — `Horse.CurrentOwnerId` is a required
+field with no "unowned" state, so a standalone create-ownership endpoint
+wouldn't have a meaningful use case; documented as a scope decision, not a gap.
+
+## Lineage Module
+
+Endpoints under `/api/v1/horses/{horseId}/lineage`: `GET /parents`,
+`GET /children`, `GET /family-tree?maxGenerations=N`, `PUT` (set father/mother),
+`DELETE` (clear both). Father must be Stallion or Colt; Mother must be Mare or
+Filly (Gelding explicitly excluded — a castrated male cannot sire foals).
+
+## Image Module
+
+Endpoints under `/api/v1/horses/{horseId}/images`: `GET` (gallery), `POST`
+(upload, multipart/form-data), `PUT /{imageId}` (replace), `DELETE /{imageId}`,
+`PUT /{imageId}/main`, `PUT /reorder`. Backed by Cloudinary via
+`IImageStorageService`; validated for content type, min/max file size
+(1 KB–5 MB default), min/max pixel dimensions (200x200–8000x8000 default), and
+duplicate content (SHA-256 hash) before any remote call.
+
 ## New APIs
 
 | Endpoint | Method | Access |
 |---|---|---|
-| `/api/v1/horses` | POST | Administrator, Owner, Veterinarian |
-| `/api/v1/horses/{id}` | PUT | Administrator, Owner, Veterinarian |
-| `/api/v1/horses/{id}` | DELETE (soft) | Administrator, Owner, Veterinarian |
-| `/api/v1/horses/{id}/restore` | POST | Administrator, Owner, Veterinarian |
-| `/api/v1/horses/{id}` | GET | Any authenticated user |
-| `/api/v1/horses` | GET (paged) | Any authenticated user |
-| `/api/v1/horses/search` | GET (paged, filtered) | Any authenticated user |
+| `/api/v1/horses/{horseId}/ownership/current` | GET | Any authenticated user |
+| `/api/v1/horses/{horseId}/ownership/history` | GET | Any authenticated user |
+| `/api/v1/horses/{horseId}/ownership/transfer` | POST | Administrator, Owner, Veterinarian |
+| `/api/v1/ownership-records/{recordId}` | PUT / DELETE | Administrator, Owner, Veterinarian |
+| `/api/v1/horses/{horseId}/lineage/parents` | GET | Any authenticated user |
+| `/api/v1/horses/{horseId}/lineage/children` | GET | Any authenticated user |
+| `/api/v1/horses/{horseId}/lineage/family-tree` | GET | Any authenticated user |
+| `/api/v1/horses/{horseId}/lineage` | PUT / DELETE | Administrator, Owner, Veterinarian |
+| `/api/v1/horses/{horseId}/images` | GET / POST | GET: any user; POST: Administrator, Owner, Veterinarian |
+| `/api/v1/horses/{horseId}/images/{imageId}` | PUT / DELETE | Administrator, Owner, Veterinarian |
+| `/api/v1/horses/{horseId}/images/{imageId}/main` | PUT | Administrator, Owner, Veterinarian |
+| `/api/v1/horses/{horseId}/images/reorder` | PUT | Administrator, Owner, Veterinarian |
 
-## Testing Summary
+## Testing Results
 
-- **Unit tests** (`tests/SmartHorse.Application.Tests/Horses/`): Create (5
-  cases: success, unknown breed, duplicate microchip, duplicate registration,
-  unknown owner, default-status resolution), Update (3 cases), Delete (3
-  cases, including double-delete guard), Restore (2 cases), Search (2 cases,
-  including full-criteria pass-through verification).
-- **Integration tests** (`tests/SmartHorse.API.IntegrationTests/HorsesControllerTests.cs`):
-  Create as Owner (201), Create as Buyer (403), Create without token (401),
-  Create with future birth date (400), read access for a read-only role (200),
-  delete→get(404)→restore→get(200) round trip, search with a breed filter.
-- Both test projects reuse Sprint 2's existing `CustomWebApplicationFactory`
-  (EF Core InMemory) and `Moq`/`FluentAssertions` conventions unchanged.
-
-**I could not actually execute `dotnet test` in this environment** — see
-BUILD_REPORT.md for what was and wasn't verified.
-
-## Integration Notes
-
-- Horse Core's write-access policy (`CanManageHorses`) is role-based, using the
-  exact same `RequireRole` mechanism as Person 1's `RequireAdministrator`
-  policy — not the fine-grained `Permissions`/`RolePermissions` tables, even
-  though this sprint also seeds `horses.view`/`horses.manage` permission rows.
-  Those rows are seeded now so a future fine-grained authorization handler
-  (v0.2 §2.2) has data to work with, but nothing evaluates them yet — the same
-  is true of every other seeded permission in this codebase today.
-- `CreateHorseCommandHandler` validates the given `OwnerId` via the existing
-  `IUserRepository` — no new coupling was introduced beyond an interface
-  Person 1 already exposed.
+**Not executed** — see BUILD_REPORT.md. Written: 12 new unit test cases
+(Ownership: 4, Lineage: 5, Images: 4) plus 13 new integration test cases across
+three controllers (Ownership: 4, Lineage: 4, Images: 4), reusing
+`CustomWebApplicationFactory`. A new `FakeImageStorageService` test double
+replaces the real Cloudinary implementation for integration tests, the same
+way the EF Core InMemory provider replaces SQL Server — no test hits real
+Cloudinary.
 
 ## Known Limitations
 
-- **Ownership transfer** is out of scope for this sprint. `Horse.CurrentOwnerId`
-  is set once at creation (with a corresponding `OwnershipHistory` row); there
-  is no "transfer ownership" command/endpoint yet. A future sprint should add
-  one, reusing `Horse.RecordOwnership`, which already supports it.
-- **Horse image upload** has no endpoint yet — the `HorseImages` table,
-  entity, and `Horse.AddImage` domain method exist, but nothing calls them from
-  the API. A future sprint should reuse the existing `IFileStorageService`
-  abstraction from Person 1 Sprint 2 (the same one avatar upload uses).
-- **No `/api/v1/breeds` (or colors/genders/statuses) listing endpoints** were
-  added — the repositories exist (with `GetAllAsync`) but there's no
-  controller exposing them for building dropdowns client-side. Low-risk,
-  low-effort addition for whichever sprint needs it first.
+- **Replace Image** is implemented as upload-new-then-delete-old rather than a
+  true in-place overwrite, since the upload flow always generates a unique
+  Cloudinary public_id (`UniqueFilename=true`) — documented in
+  `ReplaceHorseImageCommandHandler`'s doc comment.
+- **SetLineageDto** treats a null FatherId/MotherId as "leave unchanged," not
+  "clear it" — clearing requires the dedicated DELETE endpoint. This means one
+  PUT call can't set one parent while explicitly clearing the other; a minor,
+  documented API ergonomics trade-off.
+- No audit-log entries are written for ownership transfers or lineage changes
+  — Person 1's `AuditLog`/`AuditAction` system is scoped to auth events; adding
+  horse-domain event types to it was judged out of scope for this sprint.
+- Still unresolved from before (not this sprint's responsibility): the
+  repository has live diagnostic/debugging code (`ChangeTrackerDiagnosticsInterceptor`,
+  `SqlDiagnosticsInterceptor`) investigating a `DbUpdateConcurrencyException` on
+  Login, marked `TEMPORARY`. Untouched by this sprint — flagging again since it
+  logs sensitive request data and should be resolved before further release.
 - I could not run `dotnet build`/`dotnet test`/`dotnet ef migrations add`
-  myself in this environment (no .NET SDK, no NuGet access) — see
-  BUILD_REPORT.md.
-- **Unrelated, found during this sprint**: the repository currently has live
-  diagnostic/debugging code (`ChangeTrackerDiagnosticsInterceptor`,
-  `SqlDiagnosticsInterceptor`, verbose SQL logging) investigating an unresolved
-  `DbUpdateConcurrencyException` on Login, explicitly marked `TEMPORARY` in
-  `appsettings.json` and `Program.cs`. This is untouched by this sprint (out of
-  scope), but it logs sensitive request data (emails, token hashes, IPs) and
-  should be resolved and removed before any further release.
+  myself (no .NET SDK, no NuGet access) — see BUILD_REPORT.md.
 
 ## Future Recommendations
 
-1. Add a dedicated `TransferOwnershipCommand` (Person 2 Sprint 2?), reusing
-   `Horse.RecordOwnership`.
-2. Add horse image upload (`POST /api/v1/horses/{id}/images`), reusing
-   `IFileStorageService` and `Horse.AddImage`.
-3. Add lookup-listing endpoints (`GET /api/v1/breeds`, `/colors`, `/genders`,
-   `/horse-statuses`) for client-side dropdowns.
-4. Consider whether `CanManageHorses` should eventually be evaluated via the
-   `Permissions`/`RolePermissions` tables instead of a hardcoded role list,
-   consistent with v0.2 §2's fine-grained-permission design goal.
-5. Resolve and remove the unrelated diagnostic interceptors described above.
+1. Add a `TransferOwnershipRequestedNotification`-style event if/when the
+   Notifications module (out of scope through Sprint 2) is built, so owners
+   are notified of transfers.
+2. Consider adding horse-domain audit events to Person 1's AuditLog system
+   once it's clear that system is meant to extend beyond Auth.
+3. Add a `PATCH`-style lineage endpoint if the "set one, clear the other in
+   one call" ergonomics limitation becomes a real problem for the frontend.
+4. Resolve and remove the unrelated diagnostic interceptors (again).
