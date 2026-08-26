@@ -82,7 +82,7 @@ public class User : BaseAuditableEntity
             return; // idempotent
         }
 
-        _userRoles.Add(new UserRole(Id, role.Id));
+        _userRoles.Add(new UserRole(Id, role));
     }
 
     public void ReplaceRoles(IEnumerable<Role> roles)
@@ -90,7 +90,7 @@ public class User : BaseAuditableEntity
         _userRoles.Clear();
         foreach (var role in roles)
         {
-            _userRoles.Add(new UserRole(Id, role.Id));
+            _userRoles.Add(new UserRole(Id, role));
         }
     }
 

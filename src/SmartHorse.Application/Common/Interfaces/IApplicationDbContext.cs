@@ -20,6 +20,13 @@ public interface IApplicationDbContext
     DbSet<UserPermissionOverride> UserPermissionOverrides { get; }
     DbSet<RefreshToken> RefreshTokens { get; }
     DbSet<AuditLog> AuditLogs { get; }
+    DbSet<Breed> Breeds { get; }
+    DbSet<Color> Colors { get; }
+    DbSet<Gender> Genders { get; }
+    DbSet<HorseStatus> HorseStatuses { get; }
+    DbSet<Horse> Horses { get; }
+    DbSet<HorseImage> HorseImages { get; }
+    DbSet<OwnershipHistory> OwnershipHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

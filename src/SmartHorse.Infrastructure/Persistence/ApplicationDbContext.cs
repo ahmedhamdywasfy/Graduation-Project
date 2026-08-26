@@ -15,9 +15,11 @@ namespace SmartHorse.Infrastructure.Persistence;
 /// Sprint 1 mapped the Identity/User Management tables (v0.1 Section 13:
 /// Users, Roles, UserRoles; v0.2 Section 2.2: Permissions, RolePermissions,
 /// UserPermissionOverrides; v0.2 Section 8: RefreshTokens). Sprint 2 adds
-/// AuditLogs (Sprint 2 §6) and extends User/RefreshToken with new columns —
-/// no structural change to this class was needed for that, only new
-/// EntityTypeConfigurations (auto-discovered below) and a migration.
+/// AuditLogs (Sprint 2 §6) and extends User/RefreshToken with new columns.
+/// Person 2 Sprint 1 adds the Horse Core tables (Breeds, Colors, Genders,
+/// HorseStatuses, Horses, HorseImages, OwnershipHistories) — again, no
+/// structural change to this class beyond new DbSets and auto-discovered
+/// EntityTypeConfigurations, plus a migration.
 /// </summary>
 public class ApplicationDbContext : DbContext, IApplicationDbContext
 {
@@ -32,6 +34,13 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<UserPermissionOverride> UserPermissionOverrides => Set<UserPermissionOverride>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<Breed> Breeds => Set<Breed>();
+    public DbSet<Color> Colors => Set<Color>();
+    public DbSet<Gender> Genders => Set<Gender>();
+    public DbSet<HorseStatus> HorseStatuses => Set<HorseStatus>();
+    public DbSet<Horse> Horses => Set<Horse>();
+    public DbSet<HorseImage> HorseImages => Set<HorseImage>();
+    public DbSet<OwnershipHistory> OwnershipHistories => Set<OwnershipHistory>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

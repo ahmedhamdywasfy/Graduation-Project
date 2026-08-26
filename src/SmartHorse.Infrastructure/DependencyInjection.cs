@@ -64,6 +64,13 @@ public static class DependencyInjection
         services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
         services.AddScoped<IAuditLogRepository, AuditLogRepository>();
 
+        // ---- Horse Core repositories (Person 2 Sprint 1 §8 — Repository Pattern) ----
+        services.AddScoped<IHorseRepository, HorseRepository>();
+        services.AddScoped<IBreedRepository, BreedRepository>();
+        services.AddScoped<IColorRepository, ColorRepository>();
+        services.AddScoped<IGenderRepository, GenderRepository>();
+        services.AddScoped<IHorseStatusRepository, HorseStatusRepository>();
+
         // ---- Identity / JWT (v0.2 §8; Sprint 2 §9 — Configuration Validation) ----
         services.AddOptions<JwtSettings>()
             .Bind(configuration.GetSection(JwtSettings.SectionName))

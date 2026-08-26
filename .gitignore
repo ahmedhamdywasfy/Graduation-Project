@@ -1,0 +1,17 @@
+## .NET
+bin/
+obj/
+*.user
+.vs/
+logs/
+
+## Secrets — never commit
+appsettings.Production.json
+*.pfx
+*.pem
+
+## Packaging artifacts from apply_*.sh scripts
+.sprint2_backup_*/
+.person2_sprint1_backup_*/
+MANIFEST.txt
+DELETED_FILES.txt

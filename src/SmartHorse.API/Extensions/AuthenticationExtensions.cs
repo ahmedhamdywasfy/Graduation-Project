@@ -76,6 +76,13 @@ public static class AuthenticationExtensions
             // the full Admin module in later sprints (v0.2 Section 2).
             options.AddPolicy("RequireAdministrator", policy =>
                 policy.RequireRole(Role.Names.Administrator));
+
+            // Person 2 Sprint 1 §12 — write access to Horse Core (create/update/
+            // delete/restore) is limited to Administrator, Owner, and Veterinarian;
+            // every other authenticated role gets read-only access via the plain
+            // [Authorize] attribute on the read endpoints in HorsesController.
+            options.AddPolicy("CanManageHorses", policy =>
+                policy.RequireRole(Role.Names.Administrator, Role.Names.Owner, Role.Names.Veterinarian));
         });
 
         return services;

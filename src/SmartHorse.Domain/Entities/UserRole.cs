@@ -22,6 +22,21 @@ public class UserRole
         AssignedAt = DateTime.UtcNow;
     }
 
+    /// <summary>
+    /// Overload that also wires the <see cref="Role"/> navigation property
+    /// directly, so entities built purely in-memory (e.g. in unit tests that
+    /// never go through EF Core's query materialization) are self-consistent
+    /// without relying on EF's change-tracker relationship fixup. Used by
+    /// <see cref="User.AssignRole"/> and <see cref="User.ReplaceRoles"/>.
+    /// </summary>
+    public UserRole(Guid userId, Role role)
+    {
+        UserId = userId;
+        RoleId = role.Id;
+        Role = role;
+        AssignedAt = DateTime.UtcNow;
+    }
+
     public Guid UserId { get; private set; }
     public User User { get; private set; } = null!;
 

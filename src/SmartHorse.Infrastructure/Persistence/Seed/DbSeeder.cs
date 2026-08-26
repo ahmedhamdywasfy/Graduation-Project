@@ -55,6 +55,7 @@ public class DbSeeder
         var roles = await SeedRolesAsync();
         await SeedPermissionsAsync(roles);
         await SeedAdministratorAsync(roles);
+        await SeedHorseLookupDataAsync();
 
         await _context.SaveChangesAsync();
     }
@@ -90,7 +91,9 @@ public class DbSeeder
             ("users.unlock", "Manually unlock a locked-out user account"),
             ("roles.manage", "Assign and revoke roles"),
             ("permissions.manage", "Configure role and per-user permissions"),
-            ("audit.view", "View the system audit log")
+            ("audit.view", "View the system audit log"),
+            ("horses.view", "View horse records"),
+            ("horses.manage", "Create, update, delete, and restore horse records")
         };
 
         var existingPermissions = await _context.Permissions.ToDictionaryAsync(p => p.Key);
@@ -107,20 +110,70 @@ public class DbSeeder
 
         await _context.SaveChangesAsync();
 
-        // Administrator gets every seeded permission by default; other roles get none
-        // at this stage (module sprints will add their own RolePermissions rows).
+        // Compute every role's full target permission set in memory first, then
+        // diff against what's already persisted exactly once — avoids adding the
+        // same (RoleId, PermissionId) pair twice across the different grant rules
+        // below before a single SaveChangesAsync flushes them all.
+        var targetGrants = new Dictionary<int, HashSet<int>>();
+
+        void AddGrant(int roleId, int permissionId)
+        {
+            if (!targetGrants.TryGetValue(roleId, out var set))
+            {
+                set = new HashSet<int>();
+                targetGrants[roleId] = set;
+            }
+
+            set.Add(permissionId);
+        }
+
+        // Administrator gets every seeded permission by default.
         if (roles.TryGetValue(Role.Names.Administrator, out var adminRole))
         {
-            var existingRolePermissions = await _context.RolePermissions
-                .Where(rp => rp.RoleId == adminRole.Id)
-                .Select(rp => rp.PermissionId)
-                .ToListAsync();
-
             foreach (var permission in existingPermissions.Values)
             {
-                if (!existingRolePermissions.Contains(permission.Id))
+                AddGrant(adminRole.Id, permission.Id);
+            }
+        }
+
+        // Person 2 Sprint 1 §12 — only Administrator, Owner, and Veterinarian can
+        // create/update/delete/restore horses; every other role is read-only.
+        // (Actual enforcement this sprint uses the role-based "CanManageHorses"
+        // policy in AuthenticationExtensions, same mechanism as "RequireAdministrator" —
+        // these RolePermissions rows establish the data for a future fine-grained
+        // permission-based authorization handler, per v0.2 §2.2.)
+        if (existingPermissions.TryGetValue("horses.manage", out var horsesManagePermission))
+        {
+            foreach (var roleName in new[] { Role.Names.Owner, Role.Names.Veterinarian })
+            {
+                if (roles.TryGetValue(roleName, out var role))
                 {
-                    _context.RolePermissions.Add(new RolePermission(adminRole.Id, permission.Id));
+                    AddGrant(role.Id, horsesManagePermission.Id);
+                }
+            }
+        }
+
+        if (existingPermissions.TryGetValue("horses.view", out var horsesViewPermission))
+        {
+            foreach (var role in roles.Values)
+            {
+                AddGrant(role.Id, horsesViewPermission.Id);
+            }
+        }
+
+        var allExistingRolePermissions = await _context.RolePermissions
+            .Select(rp => new { rp.RoleId, rp.PermissionId })
+            .ToListAsync();
+        var existingSet = allExistingRolePermissions.Select(rp => (rp.RoleId, rp.PermissionId)).ToHashSet();
+
+        foreach (var (roleId, permissionIds) in targetGrants)
+        {
+            foreach (var permissionId in permissionIds)
+            {
+                if (!existingSet.Contains((roleId, permissionId)))
+                {
+                    _context.RolePermissions.Add(new RolePermission(roleId, permissionId));
+                    existingSet.Add((roleId, permissionId));
                 }
             }
         }
@@ -162,5 +215,55 @@ public class DbSeeder
 
         _context.Users.Add(admin);
         _logger.LogInformation("Seeded initial Administrator account ({Email}).", normalizedEmail);
+    }
+
+    /// <summary>
+    /// Seeds the small reference tables Horse Core depends on (Person 2 Sprint 1
+    /// §1). Idempotent — same "if not already present" pattern as SeedRolesAsync —
+    /// safe to run on every deployment. Written as four explicit blocks (rather
+    /// than a generic reflection-based helper) to match the rest of this class's style.
+    /// </summary>
+    private async Task SeedHorseLookupDataAsync()
+    {
+        var breedNames = new[] { "Arabian", "Thoroughbred", "Quarter Horse", "Andalusian", "Friesian", "Appaloosa", "Mustang" };
+        var existingBreeds = (await _context.Breeds.Select(b => b.Name).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in breedNames)
+        {
+            if (!existingBreeds.Contains(name))
+            {
+                _context.Breeds.Add(new Breed(name));
+            }
+        }
+
+        var colorNames = new[] { "Bay", "Black", "Chestnut", "Grey", "Palomino", "Roan", "Buckskin", "White" };
+        var existingColors = (await _context.Colors.Select(c => c.Name).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in colorNames)
+        {
+            if (!existingColors.Contains(name))
+            {
+                _context.Colors.Add(new Color(name));
+            }
+        }
+
+        var genderNames = new[] { "Stallion", "Mare", "Gelding", "Colt", "Filly" };
+        var existingGenders = (await _context.Genders.Select(g => g.Name).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in genderNames)
+        {
+            if (!existingGenders.Contains(name))
+            {
+                _context.Genders.Add(new Gender(name));
+            }
+        }
+
+        var existingStatuses = (await _context.HorseStatuses.Select(s => s.Name).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in HorseStatus.Names.All)
+        {
+            if (!existingStatuses.Contains(name))
+            {
+                _context.HorseStatuses.Add(new HorseStatus(name));
+            }
+        }
+
+        await _context.SaveChangesAsync();
     }
 }

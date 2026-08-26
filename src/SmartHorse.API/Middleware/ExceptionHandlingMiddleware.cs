@@ -87,6 +87,8 @@ public class ExceptionHandlingMiddleware
     {
         NotFoundException => (HttpStatusCode.NotFound, "Resource not found"),
         ValidationException => (HttpStatusCode.BadRequest, "Validation failed"),
+        InvalidHorseBirthDateException => (HttpStatusCode.BadRequest, "Invalid birth date"),
+        InvalidHorseMeasurementException => (HttpStatusCode.BadRequest, "Invalid measurement"),
         InvalidPasswordResetTokenException => (HttpStatusCode.BadRequest, "Invalid reset token"),
         InvalidEmailConfirmationTokenException => (HttpStatusCode.BadRequest, "Invalid confirmation token"),
         InvalidCurrentPasswordException => (HttpStatusCode.BadRequest, "Incorrect current password"),
